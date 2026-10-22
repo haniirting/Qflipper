@@ -1,0 +1,96 @@
+name: Unzip and release
+
+# Same way as the Flipper Phone repository:
+# 1. Add this file as .github/workflows/unzip-and-release.yml (main branch).
+# 2. Upload flipper-pc.zip to the repository root (do NOT unzip it).
+# 3. Actions → "Unzip and release" → Run workflow. Optional version, for example 1.0.0.
+# It unzips the code into the repository, commits it, runs the tests, builds the three Windows
+# programs and publishes them in Releases.
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version, for example 1.0.0 (empty = 1.0.<run number>)"
+        required: false
+        default: ""
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Unzip flipper-pc.zip into the repository
+        run: |
+          if (-not (Test-Path flipper-pc.zip)) {
+            Write-Host "flipper-pc.zip is not in the repository root. Upload it there and run again."
+            exit 1
+          }
+          Remove-Item _tmp -Recurse -Force -ErrorAction SilentlyContinue
+          Expand-Archive -Path flipper-pc.zip -DestinationPath _tmp -Force
+          $src = Join-Path _tmp flipper-pc
+          if (-not (Test-Path $src)) { $src = "_tmp" }
+          Remove-Item (Join-Path $src ".git") -Recurse -Force -ErrorAction SilentlyContinue
+          Remove-Item (Join-Path $src ".github") -Recurse -Force -ErrorAction SilentlyContinue
+          Copy-Item -Path (Join-Path $src "*") -Destination "." -Recurse -Force
+          Remove-Item _tmp -Recurse -Force
+          Remove-Item flipper-pc.zip -Force
+          foreach ($f in @("flipper-desk/flipper_desk.py", "phone-desk/flipper_phone_desk.py", "phone-mirror/flipper_phone_mirror.py")) {
+            if (-not (Test-Path $f)) { Write-Host "Missing $f"; exit 1 }
+          }
+          Write-Host "Unzipped."
+
+      - name: Commit the unzipped code
+        run: |
+          git config user.name "github-actions"
+          git config user.email "github-actions@users.noreply.github.com"
+          git add -A
+          git commit -m "Unzip flipper-pc.zip"
+          if ($LASTEXITCODE -ne 0) { Write-Host "Nothing new to commit" }
+          git push
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install tools
+        run: pip install pyserial pyinstaller
+
+      - name: Tests
+        run: |
+          python flipper-desk/test_rpc.py
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+          python phone-desk/test_desk.py
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+          python phone-mirror/test_mirror.py
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+
+      - name: Build Windows programs
+        run: |
+          pyinstaller --onefile --windowed --name FlipperDesk --collect-submodules serial --add-data "flipper-desk/assets;assets" --distpath dist flipper-desk/flipper_desk.py
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+          pyinstaller --onefile --windowed --name FlipperPhoneDesk --distpath dist phone-desk/flipper_phone_desk.py
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+          pyinstaller --onefile --windowed --name FlipperPhoneMirror --distpath dist phone-mirror/flipper_phone_mirror.py
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+          Get-ChildItem dist
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $v = "${{ github.event.inputs.version }}"
+          if ([string]::IsNullOrEmpty($v)) { $v = "1.0.${{ github.run_number }}" }
+          $tag = "v$v"
+          git tag -a $tag -m "Flipper PC $v"
+          git push origin $tag
+          gh release create $tag dist/FlipperDesk.exe dist/FlipperPhoneDesk.exe dist/FlipperPhoneMirror.exe --title "Flipper PC $v" --notes "Windows programs: FlipperDesk (manage a Flipper), FlipperPhoneDesk (Flipper Phone files, Bad USB upload), FlipperPhoneMirror (Flipper Phone screen on the PC). Unofficial fan project, GPL-3.0."
