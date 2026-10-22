@@ -1,0 +1,1 @@
+# no extra packages: uses Python 3.8+ with tkinter and the adb tool (Android platform-tools)
