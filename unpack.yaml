@@ -1,0 +1,46 @@
+name: Unpack flipper-pc.zip
+
+# Step 1 (manual): create this file as .github/workflows/unpack.yml in the repository (main branch).
+# Step 2: upload flipper-pc.zip to the repository root (do not unzip it).
+# Step 3: Actions → "Unpack flipper-pc.zip" → Run workflow. After it finishes, the other files appear,
+#         including the "Unpack and release" and CI workflows.
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  unpack:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Unpack
+        run: |
+          if [ ! -f flipper-pc.zip ]; then
+            echo "flipper-pc.zip is not in the repository root. Upload it there and run again."
+            exit 1
+          fi
+          rm -rf _unpacked && mkdir _unpacked
+          python3 -c "import zipfile; zipfile.ZipFile('flipper-pc.zip').extractall('_unpacked')"
+          SRC=_unpacked
+          TOP=$(find _unpacked -mindepth 1 -maxdepth 1 -type d | head -1)
+          if [ -n "$TOP" ] && [ ! -f _unpacked/README.md ]; then SRC="$TOP"; fi
+          cp -r "$SRC"/. .
+          rm -rf _unpacked flipper-pc.zip
+          test -f flipper-desk/flipper_desk.py
+          test -f phone-desk/flipper_phone_desk.py
+          test -f phone-mirror/flipper_phone_mirror.py
+          test -f .github/workflows/unpack-and-release.yml
+          echo "Unpacked."
+
+      - name: Commit
+        run: |
+          git config user.name "github-actions"
+          git config user.email "github-actions@users.noreply.github.com"
+          git add -A
+          git commit -m "Unpack flipper-pc.zip" || echo "Nothing to commit"
+          git push
